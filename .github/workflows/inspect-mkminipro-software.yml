@@ -3,6 +3,9 @@ name: Inspect MKMINIPRO Software
 on:
   push:
     branches: ["main"]
+    paths:
+      - "scripts/inspect-mkminipro-official.ps1"
+      - ".github/workflows/inspect-mkminipro-software.yml"
   workflow_dispatch:
 
 permissions:
@@ -12,115 +15,18 @@ jobs:
   inspect:
     runs-on: windows-latest
     timeout-minutes: 15
-
     steps:
-      - name: Prepare workspace
-        shell: powershell
-        run: |
-          $root = Join-Path $env:RUNNER_TEMP "mkminipro-inspect"
-          if (Test-Path $root) { Remove-Item -Recurse -Force $root }
-          New-Item -ItemType Directory -Path $root | Out-Null
-          "ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Download official MKMINIPRO package
+      - name: Extract and inspect official software (no execution)
         shell: powershell
-        run: |
-          $zip = Join-Path $env:ROOT "mkminipro.zip"
-          Invoke-WebRequest -Uri "https://marsgaming.eu/en/index.php?controller=attachment&id_attachment=863" -OutFile $zip -UseBasicParsing
-          Get-FileHash $zip -Algorithm SHA256
-          Expand-Archive -Path $zip -DestinationPath (Join-Path $env:ROOT "package") -Force
-          Get-ChildItem (Join-Path $env:ROOT "package") -Recurse | Select-Object FullName,Length
+        run: .\scripts\inspect-mkminipro-official.ps1
 
-      - name: Extract installer without executing it
-        shell: powershell
-        run: |
-          $toolZip = Join-Path $env:ROOT "innoextract.zip"
-          Invoke-WebRequest -Uri "https://github.com/dscharrer/innoextract/releases/download/1.9/innoextract-1.9-windows.zip" -OutFile $toolZip -UseBasicParsing
-          Expand-Archive -Path $toolZip -DestinationPath (Join-Path $env:ROOT "innoextract") -Force
-          $inno = Get-ChildItem (Join-Path $env:ROOT "innoextract") -Recurse -File -Filter innoextract.exe | Select-Object -First 1
-          if (-not $inno) { throw "innoextract.exe not found" }
-          $installer = Get-ChildItem (Join-Path $env:ROOT "package") -Recurse -File -Filter *.exe | Sort-Object Length -Descending | Select-Object -First 1
-          if (-not $installer) { throw "MKMINIPRO installer not found" }
-          $out = Join-Path $env:ROOT "extracted"
-          New-Item -ItemType Directory -Path $out | Out-Null
-          Push-Location $out
-          & $inno.FullName --extract --silent $installer.FullName
-          $code=$LASTEXITCODE
-          Pop-Location
-          if ($code -ne 0) { throw "innoextract failed with exit code $code" }
-          Get-ChildItem $out -Recurse -Force | Select-Object FullName,Length
-
-      - name: Build static inspection report
-        shell: powershell
-        run: |
-          $out = Join-Path $env:ROOT "extracted"
-          $report = Join-Path $env:ROOT "mkminipro-report.txt"
-          "MKMINIPRO STATIC INSPECTION" | Set-Content $report
-          "Generated: $(Get-Date -Format o)" | Add-Content $report
-          "" | Add-Content $report
-          "=== FILE TREE ===" | Add-Content $report
-          Get-ChildItem $out -Recurse -File | ForEach-Object {
-            $hash=(Get-FileHash $_.FullName -Algorithm SHA256).Hash
-            "$($_.Length)`t$hash`t$($_.FullName)" | Add-Content $report
-          }
-          "" | Add-Content $report
-          "=== VERSION INFO ===" | Add-Content $report
-          Get-ChildItem $out -Recurse -File | Where-Object { $_.Extension -in '.exe','.dll' } | ForEach-Object {
-            $v=$_.VersionInfo
-            "FILE=$($_.FullName)" | Add-Content $report
-            "Company=$($v.CompanyName) Product=$($v.ProductName) Desc=$($v.FileDescription) FileVersion=$($v.FileVersion) ProductVersion=$($v.ProductVersion)" | Add-Content $report
-          }
-          "" | Add-Content $report
-          "=== TEXT CONFIG MATCHES ===" | Add-Content $report
-          $patterns='5566|0008|VID_|PID_|MI_02|HID|RGB|key_rgb|key_code|light|keyboard|report|feature|macro|61K|64K'
-          Get-ChildItem $out -Recurse -File | Where-Object { $_.Extension -in '.ini','.xml','.json','.txt','.cfg','.config','.sql' } | ForEach-Object {
-            $hits=Select-String -Path $_.FullName -Pattern $patterns -CaseSensitive:$false -ErrorAction SilentlyContinue
-            if ($hits) {
-              "--- $($_.FullName) ---" | Add-Content $report
-              $hits | ForEach-Object { $_.Line | Add-Content $report }
-            }
-          }
-          $py=@'
-import os,re
-root=os.path.join(os.environ['ROOT'],'extracted')
-report=os.path.join(os.environ['ROOT'],'mkminipro-report.txt')
-needles=[b'5566',b'0008',b'VID_',b'PID_',b'MI_02',b'hid.dll',b'HidD_SetFeature',b'HidD_GetFeature',b'HidD_SetOutputReport',b'HidD_GetPreparsedData',b'WriteFile',b'ReadFile',b'CreateFile',b'SetupDi',b'RGB',b'key_rgb',b'key_code',b'light',b'macro',b'report',b'feature']
-def astr(d): return re.findall(rb'[\x20-\x7e]{4,}',d)
-def ustr(d):
-    out=[]
-    for m in re.findall(rb'(?:[\x20-\x7e]\x00){4,}',d):
-        try: out.append(m.decode('utf-16le').encode('utf-8'))
-        except: pass
-    return out
-with open(report,'a',encoding='utf-8',errors='replace') as f:
-    f.write('\n=== BINARY STRING MATCHES ===\n')
-    for dp,_,fs in os.walk(root):
-        for fn in fs:
-            if not fn.lower().endswith(('.exe','.dll')): continue
-            p=os.path.join(dp,fn)
-            try: data=open(p,'rb').read()
-            except: continue
-            hits=[]; seen=set()
-            for s in astr(data)+ustr(data):
-                if any(n.lower() in s.lower() for n in needles):
-                    t=s.decode('utf-8','replace')
-                    if t not in seen:
-                        seen.add(t); hits.append(t)
-            if hits:
-                f.write('\n--- '+p+' ---\n')
-                for h in hits[:2000]: f.write(h+'\n')
-'@
-          $scan=Join-Path $env:ROOT "scan.py"
-          Set-Content -Path $scan -Value $py -Encoding UTF8
-          python $scan
-          Get-Content $report
-
-      - name: Upload inspection artifact
+      - name: Upload static inspection
         uses: actions/upload-artifact@v4
         with:
           name: mkminipro-static-inspection
-          path: |
-            ${{ runner.temp }}/mkminipro-inspect/mkminipro-report.txt
-            ${{ runner.temp }}/mkminipro-inspect/extracted/**
+          path: inspection-output/**
           if-no-files-found: error
           retention-days: 2
