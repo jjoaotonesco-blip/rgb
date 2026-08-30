@@ -1,4 +1,4 @@
-name: Build RGB Studio Installer
+name: Build Nova RGB Installer
 
 on:
   push:
@@ -22,16 +22,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Generate RGB Studio icon
+      - name: Prepare final Nova RGB icon
         shell: powershell
         run: .\scripts\generate-rgb-studio-icon.ps1
 
-      - name: Rebrand UI as RGB Studio
+      - name: Rebrand UI as Nova RGB
         shell: powershell
         run: |
           $path = '.\src\MKMiniProStudio\MainForm.cs'
           $text = Get-Content $path -Raw
-          $text = $text.Replace('MKMINIPRO Studio', 'RGB Studio')
+          $text = $text.Replace('MKMINIPRO Studio', 'Nova RGB')
+          $text = $text.Replace('RGB Studio', 'Nova RGB')
           Set-Content $path $text -Encoding UTF8
 
       - name: Setup .NET 8
@@ -55,7 +56,7 @@ jobs:
         shell: powershell
         run: |
           Get-ChildItem .\publish -File | Format-Table Name,Length
-          if (-not (Test-Path '.\publish\RGB Studio.exe')) { throw 'RGB Studio.exe missing' }
+          if (-not (Test-Path '.\publish\Nova RGB.exe')) { throw 'Nova RGB.exe missing' }
 
       - name: Install Inno Setup compiler
         shell: powershell
@@ -73,14 +74,14 @@ jobs:
           New-Item -ItemType Directory -Path .\dist -Force | Out-Null
           & $iscc .\installer\RGBStudio.iss
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed: $LASTEXITCODE" }
-          if (-not (Test-Path '.\dist\RGB Studio Setup.exe')) { throw 'Setup EXE missing' }
-          Get-Item '.\dist\RGB Studio Setup.exe' | Format-List Name,Length,LastWriteTime
+          if (-not (Test-Path '.\dist\Nova RGB Setup.exe')) { throw 'Nova RGB Setup.exe missing' }
+          Get-Item '.\dist\Nova RGB Setup.exe' | Format-List Name,Length,LastWriteTime
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: rgb-studio-setup
-          path: dist/RGB Studio Setup.exe
+          name: nova-rgb-setup
+          path: dist/Nova RGB Setup.exe
           retention-days: 7
 
   deliver:
@@ -91,7 +92,7 @@ jobs:
       - name: Download installer
         uses: actions/download-artifact@v4
         with:
-          name: rgb-studio-setup
+          name: nova-rgb-setup
           path: installer-output
 
       - name: Put Setup on Desktop
@@ -100,7 +101,8 @@ jobs:
           $desktop = [Environment]::GetFolderPath('Desktop')
           if ([string]::IsNullOrWhiteSpace($desktop)) { $desktop = Join-Path $env:USERPROFILE 'Desktop' }
           New-Item -ItemType Directory -Path $desktop -Force | Out-Null
-          $src = Resolve-Path '.\installer-output\RGB Studio Setup.exe'
-          $dst = Join-Path $desktop 'RGB Studio Setup.exe'
+          Remove-Item (Join-Path $desktop 'RGB Studio Setup.exe') -Force -ErrorAction SilentlyContinue
+          $src = Resolve-Path '.\installer-output\Nova RGB Setup.exe'
+          $dst = Join-Path $desktop 'Nova RGB Setup.exe'
           Copy-Item $src $dst -Force
           Write-Host "SETUP_READY=$dst"
