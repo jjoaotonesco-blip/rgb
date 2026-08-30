@@ -1,0 +1,120 @@
+name: Build NovaRGB Installer
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "src/MKMiniProStudio/**"
+      - "installer/**"
+      - "scripts/generate-novargb-icon.ps1"
+      - ".github/workflows/build-novargb-installer.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Generate NovaRGB logo icon
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Path .\branding -Force | Out-Null
+          .\scripts\generate-novargb-icon.ps1 -OutputIco .\branding\NovaRGB.ico -OutputPng .\branding\NovaRGB.png
+          Copy-Item .\branding\NovaRGB.ico .\src\MKMiniProStudio\NovaRGB.ico -Force
+
+      - name: Apply installer branding
+        shell: powershell
+        run: |
+          $file = '.\src\MKMiniProStudio\MainForm.cs'
+          $text = Get-Content $file -Raw
+          $text = $text.Replace('MKMINIPRO Studio', 'NovaRGB')
+          Set-Content $file $text -Encoding UTF8
+
+      - name: Publish NovaRGB
+        shell: powershell
+        run: >-
+          dotnet publish .\src\MKMiniProStudio\MKMiniProStudio.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:DebugType=None
+          -p:DebugSymbols=false
+          -p:AssemblyName=NovaRGB
+          -p:Product=NovaRGB
+          -p:Title=NovaRGB
+          -p:Description="RGB keyboard lighting editor"
+          -p:Version=1.0.0
+          -p:ApplicationIcon=NovaRGB.ico
+          -o .\publish
+
+      - name: Verify app
+        shell: powershell
+        run: |
+          if (-not (Test-Path '.\publish\NovaRGB.exe')) { throw 'NovaRGB.exe missing' }
+          Get-Item '.\publish\NovaRGB.exe' | Format-List Name,Length,VersionInfo
+
+      - name: Install Inno Setup compiler
+        shell: powershell
+        run: choco install innosetup -y --no-progress
+
+      - name: Compile setup EXE
+        shell: powershell
+        run: |
+          $iscc = Get-ChildItem ${env:ProgramFiles(x86)} -Filter ISCC.exe -Recurse -ErrorAction SilentlyContinue |
+            Where-Object FullName -Match 'Inno Setup' |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $iscc) { throw 'ISCC.exe not found' }
+          & $iscc '.\installer\NovaRGB.iss'
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed: $LASTEXITCODE" }
+          if (-not (Test-Path '.\dist\NovaRGB-Setup.exe')) { throw 'Setup EXE missing' }
+          Get-FileHash '.\dist\NovaRGB-Setup.exe' -Algorithm SHA256 | Format-List
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: NovaRGB-Installer
+          path: |
+            dist/NovaRGB-Setup.exe
+            branding/NovaRGB.png
+          retention-days: 7
+
+  deliver-to-pc:
+    needs: build-installer
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 10
+    steps:
+      - name: Download installer
+        uses: actions/download-artifact@v4
+        with:
+          name: NovaRGB-Installer
+          path: installer-out
+
+      - name: Put installer on Desktop and Downloads
+        shell: powershell
+        run: |
+          $src = Resolve-Path '.\installer-out\NovaRGB-Setup.exe'
+          $desktop = [Environment]::GetFolderPath('Desktop')
+          if ([string]::IsNullOrWhiteSpace($desktop)) { $desktop = Join-Path $env:USERPROFILE 'Desktop' }
+          $downloads = Join-Path $env:USERPROFILE 'Downloads'
+          New-Item -ItemType Directory -Path $desktop,$downloads -Force | Out-Null
+          $desktopSetup = Join-Path $desktop 'NovaRGB Setup.exe'
+          $downloadsSetup = Join-Path $downloads 'NovaRGB Setup.exe'
+          Copy-Item $src $desktopSetup -Force
+          Copy-Item $src $downloadsSetup -Force
+          Copy-Item '.\installer-out\NovaRGB.png' (Join-Path $downloads 'NovaRGB Logo.png') -Force
+          Write-Host 'INSTALLER_READY'
+          Write-Host "DESKTOP=$desktopSetup"
+          Write-Host "DOWNLOADS=$downloadsSetup"
+          Get-FileHash $desktopSetup -Algorithm SHA256 | Format-List
