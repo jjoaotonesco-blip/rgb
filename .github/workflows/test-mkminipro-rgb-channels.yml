@@ -1,0 +1,24 @@
+name: Test MKMINIPRO RGB Channels
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/test-mkminipro-rgb-channels.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rgb-channels:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Test red green blue channels
+        shell: powershell
+        run: .\scripts\test-mkminipro-rgb-channels.ps1
