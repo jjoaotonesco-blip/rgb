@@ -1,0 +1,64 @@
+name: Patch Studio Persistent RGB
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[persistent-patched]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch Studio to write onboard Custom RGB
+        shell: python
+        run: |
+          from pathlib import Path
+
+          dev = Path('src/MKMiniProStudio/MkMiniProDevice.cs')
+          s = dev.read_text(encoding='utf-8')
+          marker = '''    public async Task SendFrameAsync(byte[] rgb384, CancellationToken ct = default)\n    {\n        if (rgb384.Length != 384) throw new ArgumentException("RGB frame must be exactly 384 bytes.", nameof(rgb384));\n        await gate.WaitAsync(ct);\n        try { await Task.Run(() => SendFrame(rgb384, ct), ct); }\n        finally { gate.Release(); }\n    }\n'''
+          addition = marker + '''\n    // Official MKMINIPRO section 7 / Custom lighting path. Unlike 0xDD live preview,\n    // command 0x0B stores the custom per-key map used by the keyboard after preview ends.\n    public async Task SendPersistentFrameAsync(byte[] rgb384, CancellationToken ct = default)\n    {\n        if (rgb384.Length != 384) throw new ArgumentException("RGB frame must be exactly 384 bytes.", nameof(rgb384));\n        await gate.WaitAsync(ct);\n        try { await Task.Run(() => SendPersistentFrame(rgb384, ct), ct); }\n        finally { gate.Release(); }\n    }\n'''
+          if 'SendPersistentFrameAsync' not in s:
+              if marker not in s: raise SystemExit('SendFrameAsync marker not found')
+              s = s.replace(marker, addition, 1)
+
+          marker2 = '''    void SendFrame(byte[] rgb, CancellationToken ct)\n    {\n        var path = FindPath() ?? throw new InvalidOperationException("MKMINIPRO não encontrado (VID 5566 / PID 0008 / MI_02). Liga o teclado e tenta novamente.");\n        using var h = CreateFile(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);\n        if (h.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error(), "Não foi possível abrir o RGB do MKMINIPRO. Fecha o software oficial da Mars e tenta novamente.");\n        ValidateCaps(h);\n        SendAck(h, Simple(0x01), "BEGIN", ct);\n        for (int chunk=0; chunk<7; chunk++)\n        {\n            int offset=chunk*56, len=chunk<6 ? 56 : 48;\n            SendAck(h, Data(rgb, offset, len), $"DATA {chunk}", ct);\n        }\n        SendAck(h, Simple(0x02), "APPLY", ct);\n    }\n'''
+          addition2 = marker2 + '''\n    void SendPersistentFrame(byte[] rgb, CancellationToken ct)\n    {\n        var path = FindPath() ?? throw new InvalidOperationException("MKMINIPRO não encontrado (VID 5566 / PID 0008 / MI_02). Liga o teclado e tenta novamente.");\n        using var h = CreateFile(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);\n        if (h.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error(), "Não foi possível abrir o RGB do MKMINIPRO. Fecha o software oficial da Mars e tenta novamente.");\n        ValidateCaps(h);\n        SendAck(h, Simple(0x01), "BEGIN CUSTOM", ct);\n        for (int chunk=0; chunk<7; chunk++)\n        {\n            int offset=chunk*56, len=chunk<6 ? 56 : 48;\n            SendAck(h, Data(rgb, offset, len, 0x0B), $"CUSTOM DATA {chunk}", ct);\n        }\n        SendAck(h, Simple(0x02), "APPLY CUSTOM", ct);\n    }\n'''
+          if 'void SendPersistentFrame(' not in s:
+              if marker2 not in s: raise SystemExit('SendFrame marker not found')
+              s = s.replace(marker2, addition2, 1)
+
+          old_data = '''    static byte[] Data(byte[] rgb, int offset, int len)\n    {\n        var r=new byte[65]; r[1]=0x55; r[2]=0xDD; r[5]=(byte)len; r[6]=(byte)offset; r[7]=(byte)(offset>>8);\n        Array.Copy(rgb, offset, r, 9, len); r[4]=Checksum(r); return r;\n    }\n'''
+          new_data = '''    static byte[] Data(byte[] rgb, int offset, int len, byte command = 0xDD)\n    {\n        var r=new byte[65]; r[1]=0x55; r[2]=command; r[5]=(byte)len; r[6]=(byte)offset; r[7]=(byte)(offset>>8);\n        Array.Copy(rgb, offset, r, 9, len); r[4]=Checksum(r); return r;\n    }\n'''
+          if old_data in s:
+              s = s.replace(old_data, new_data, 1)
+          elif 'byte command = 0xDD' not in s:
+              raise SystemExit('Data marker not found')
+          dev.write_text(s, encoding='utf-8')
+
+          form = Path('src/MKMiniProStudio/MainForm.cs')
+          s = form.read_text(encoding='utf-8')
+          s = s.replace('var send = ActionButton("Enviar agora");', 'var send = ActionButton("Fixar no teclado");', 1)
+          s = s.replace('SetHardwareStatus("A enviar…", Color.Gold);\n            await device.SendFrameAsync((byte[])Current.Data.Clone());\n            SetHardwareStatus("● Ligado • enviado", Color.FromArgb(73, 220, 129));',
+                        'SetHardwareStatus("A fixar no teclado…", Color.Gold);\n            // Stop queued live preview first; the persistent write itself is one-shot.\n            previewDebounce.Stop();\n            pendingPreview = null;\n            await device.SendPersistentFrameAsync((byte[])Current.Data.Clone());\n            SetHardwareStatus("● Ligado • cor fixa gravada", Color.FromArgb(73, 220, 129));', 1)
+          if 'Fixar no teclado' not in s or 'SendPersistentFrameAsync' not in s:
+              raise SystemExit('MainForm persistent patch failed')
+          form.write_text(s, encoding='utf-8')
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/MKMiniProStudio/MkMiniProDevice.cs src/MKMiniProStudio/MainForm.cs
+          if git diff --cached --quiet; then
+            echo "Already patched"
+            exit 0
+          fi
+          git commit -m "Use onboard Custom RGB for one-shot static colors [persistent-patched]"
+          git push
