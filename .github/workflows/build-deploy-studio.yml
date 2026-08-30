@@ -1,11 +1,13 @@
-name: Build and Install MKMINIPRO Studio
+name: Build RGB Studio Installer
 
 on:
   push:
     branches: ["main"]
     paths:
       - "src/MKMiniProStudio/**"
-      - "scripts/install-mkminipro-studio.ps1"
+      - "assets/**"
+      - "installer/**"
+      - "scripts/generate-rgb-studio-icon.ps1"
       - ".github/workflows/build-deploy-studio.yml"
   workflow_dispatch:
 
@@ -15,10 +17,22 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Generate RGB Studio icon
+        shell: powershell
+        run: .\scripts\generate-rgb-studio-icon.ps1
+
+      - name: Rebrand UI as RGB Studio
+        shell: powershell
+        run: |
+          $path = '.\src\MKMiniProStudio\MainForm.cs'
+          $text = Get-Content $path -Raw
+          $text = $text.Replace('MKMINIPRO Studio', 'RGB Studio')
+          Set-Content $path $text -Encoding UTF8
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
@@ -37,33 +51,56 @@ jobs:
           -p:DebugSymbols=false
           -o .\publish
 
-      - name: Check published EXE
+      - name: Verify app
         shell: powershell
         run: |
           Get-ChildItem .\publish -File | Format-Table Name,Length
-          if (-not (Test-Path '.\publish\MKMINIPRO Studio.exe')) { throw 'MKMINIPRO Studio.exe missing' }
+          if (-not (Test-Path '.\publish\RGB Studio.exe')) { throw 'RGB Studio.exe missing' }
 
-      - name: Upload app
+      - name: Install Inno Setup compiler
+        shell: powershell
+        run: choco install innosetup --no-progress -y
+
+      - name: Build Setup EXE
+        shell: powershell
+        run: |
+          $candidates = @(
+            (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'),
+            (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe')
+          )
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { throw 'ISCC.exe not found after Inno Setup installation' }
+          New-Item -ItemType Directory -Path .\dist -Force | Out-Null
+          & $iscc .\installer\RGBStudio.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed: $LASTEXITCODE" }
+          if (-not (Test-Path '.\dist\RGB Studio Setup.exe')) { throw 'Setup EXE missing' }
+          Get-Item '.\dist\RGB Studio Setup.exe' | Format-List Name,Length,LastWriteTime
+
+      - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: mkminipro-studio-win-x64
-          path: publish/**
-          retention-days: 2
+          name: rgb-studio-setup
+          path: dist/RGB Studio Setup.exe
+          retention-days: 7
 
-  install:
+  deliver:
     needs: build
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download app
+      - name: Download installer
         uses: actions/download-artifact@v4
         with:
-          name: mkminipro-studio-win-x64
-          path: publish
+          name: rgb-studio-setup
+          path: installer-output
 
-      - name: Install to Documents and create desktop shortcut
+      - name: Put Setup on Desktop
         shell: powershell
-        run: .\scripts\install-mkminipro-studio.ps1 -PublishDir (Resolve-Path .\publish)
+        run: |
+          $desktop = [Environment]::GetFolderPath('Desktop')
+          if ([string]::IsNullOrWhiteSpace($desktop)) { $desktop = Join-Path $env:USERPROFILE 'Desktop' }
+          New-Item -ItemType Directory -Path $desktop -Force | Out-Null
+          $src = Resolve-Path '.\installer-output\RGB Studio Setup.exe'
+          $dst = Join-Path $desktop 'RGB Studio Setup.exe'
+          Copy-Item $src $dst -Force
+          Write-Host "SETUP_READY=$dst"
