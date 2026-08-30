@@ -1,0 +1,48 @@
+name: Inspect MKMINIPRO Background Software
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: self-hosted
+    timeout-minutes: 5
+    steps:
+      - name: Inspect related processes services and startup entries
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'SilentlyContinue'
+          Write-Host '=== PROCESSES ==='
+          Get-CimInstance Win32_Process |
+            Where-Object { ($_.Name + ' ' + $_.ExecutablePath + ' ' + $_.CommandLine) -match '(?i)mkmini|mars.?gaming|keyboard|oem|rgb' } |
+            Select-Object ProcessId,Name,ExecutablePath,CommandLine |
+            Format-List
+
+          Write-Host '=== SERVICES ==='
+          Get-CimInstance Win32_Service |
+            Where-Object { ($_.Name + ' ' + $_.DisplayName + ' ' + $_.PathName) -match '(?i)mkmini|mars.?gaming|keyboard|oem|rgb' } |
+            Select-Object Name,DisplayName,State,StartMode,PathName |
+            Format-List
+
+          Write-Host '=== HKCU RUN ==='
+          Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' |
+            Select-Object * |
+            Out-String -Width 400 |
+            Write-Host
+
+          Write-Host '=== HKLM RUN ==='
+          Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run' |
+            Select-Object * |
+            Out-String -Width 400 |
+            Write-Host
+
+          Write-Host '=== SCHEDULED TASKS (filtered) ==='
+          Get-ScheduledTask |
+            Where-Object { ($_.TaskName + ' ' + $_.TaskPath) -match '(?i)mkmini|mars|keyboard|oem|rgb' } |
+            Select-Object TaskName,TaskPath,State |
+            Format-Table -AutoSize
