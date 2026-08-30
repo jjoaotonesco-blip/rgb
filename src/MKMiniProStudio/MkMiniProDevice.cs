@@ -43,6 +43,16 @@ internal sealed class MkMiniProDevice : IDisposable
         finally { gate.Release(); }
     }
 
+    // Official MKMINIPRO section 7 / Custom lighting path. Unlike 0xDD live preview,
+    // command 0x0B stores the custom per-key map used by the keyboard after preview ends.
+    public async Task SendPersistentFrameAsync(byte[] rgb384, CancellationToken ct = default)
+    {
+        if (rgb384.Length != 384) throw new ArgumentException("RGB frame must be exactly 384 bytes.", nameof(rgb384));
+        await gate.WaitAsync(ct);
+        try { await Task.Run(() => SendPersistentFrame(rgb384, ct), ct); }
+        finally { gate.Release(); }
+    }
+
     void SendFrame(byte[] rgb, CancellationToken ct)
     {
         var path = FindPath() ?? throw new InvalidOperationException("MKMINIPRO não encontrado (VID 5566 / PID 0008 / MI_02). Liga o teclado e tenta novamente.");
@@ -56,6 +66,21 @@ internal sealed class MkMiniProDevice : IDisposable
             SendAck(h, Data(rgb, offset, len), $"DATA {chunk}", ct);
         }
         SendAck(h, Simple(0x02), "APPLY", ct);
+    }
+
+    void SendPersistentFrame(byte[] rgb, CancellationToken ct)
+    {
+        var path = FindPath() ?? throw new InvalidOperationException("MKMINIPRO não encontrado (VID 5566 / PID 0008 / MI_02). Liga o teclado e tenta novamente.");
+        using var h = CreateFile(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+        if (h.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error(), "Não foi possível abrir o RGB do MKMINIPRO. Fecha o software oficial da Mars e tenta novamente.");
+        ValidateCaps(h);
+        SendAck(h, Simple(0x01), "BEGIN CUSTOM", ct);
+        for (int chunk=0; chunk<7; chunk++)
+        {
+            int offset=chunk*56, len=chunk<6 ? 56 : 48;
+            SendAck(h, Data(rgb, offset, len, 0x0B), $"CUSTOM DATA {chunk}", ct);
+        }
+        SendAck(h, Simple(0x02), "APPLY CUSTOM", ct);
     }
 
     static void ValidateCaps(SafeFileHandle h)
@@ -83,9 +108,9 @@ internal sealed class MkMiniProDevice : IDisposable
     {
         var r=new byte[65]; r[1]=0x55; r[2]=cmd; r[4]=Checksum(r); return r;
     }
-    static byte[] Data(byte[] rgb, int offset, int len)
+    static byte[] Data(byte[] rgb, int offset, int len, byte command = 0xDD)
     {
-        var r=new byte[65]; r[1]=0x55; r[2]=0xDD; r[5]=(byte)len; r[6]=(byte)offset; r[7]=(byte)(offset>>8);
+        var r=new byte[65]; r[1]=0x55; r[2]=command; r[5]=(byte)len; r[6]=(byte)offset; r[7]=(byte)(offset>>8);
         Array.Copy(rgb, offset, r, 9, len); r[4]=Checksum(r); return r;
     }
     static byte Checksum(byte[] r) { int s=0; for(int i=5;i<65;i++) s+=r[i]; return (byte)(s&0xFF); }

@@ -77,7 +77,7 @@ internal sealed class MainForm : Form
         livePreview.AutoSize = true;
         livePreview.Checked = true;
         livePreview.Margin = new Padding(0, 10, 12, 0);
-        var send = ActionButton("Enviar agora");
+        var send = ActionButton("Fixar no teclado");
         send.Click += async (_, _) => await SendNowAsync();
         var save = ActionButton("Guardar projeto");
         save.Click += (_, _) => SaveProject();
@@ -431,9 +431,12 @@ internal sealed class MainForm : Form
     {
         try
         {
-            SetHardwareStatus("A enviar…", Color.Gold);
-            await device.SendFrameAsync((byte[])Current.Data.Clone());
-            SetHardwareStatus("● Ligado • enviado", Color.FromArgb(73, 220, 129));
+            SetHardwareStatus("A fixar no teclado…", Color.Gold);
+            // Stop queued live preview first; the persistent write itself is one-shot.
+            previewDebounce.Stop();
+            pendingPreview = null;
+            await device.SendPersistentFrameAsync((byte[])Current.Data.Clone());
+            SetHardwareStatus("● Ligado • cor fixa gravada", Color.FromArgb(73, 220, 129));
         }
         catch (Exception ex)
         {
