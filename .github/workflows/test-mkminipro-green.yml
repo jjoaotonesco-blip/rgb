@@ -219,3 +219,5 @@ public static class MkMiniRgb {
 
           Add-Type -TypeDefinition $src -Language CSharp
           [MkMiniRgb]::Run()
+
+# trigger run 2026-08-30
