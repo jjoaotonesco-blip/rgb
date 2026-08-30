@@ -1,0 +1,69 @@
+name: Build and Install MKMINIPRO Studio
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "src/MKMiniProStudio/**"
+      - "scripts/install-mkminipro-studio.ps1"
+      - ".github/workflows/build-deploy-studio.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish Windows app
+        shell: powershell
+        run: >-
+          dotnet publish .\src\MKMiniProStudio\MKMiniProStudio.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:DebugType=None
+          -p:DebugSymbols=false
+          -o .\publish
+
+      - name: Check published EXE
+        shell: powershell
+        run: |
+          Get-ChildItem .\publish -File | Format-Table Name,Length
+          if (-not (Test-Path '.\publish\MKMINIPRO Studio.exe')) { throw 'MKMINIPRO Studio.exe missing' }
+
+      - name: Upload app
+        uses: actions/upload-artifact@v4
+        with:
+          name: mkminipro-studio-win-x64
+          path: publish/**
+          retention-days: 2
+
+  install:
+    needs: build
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download app
+        uses: actions/download-artifact@v4
+        with:
+          name: mkminipro-studio-win-x64
+          path: publish
+
+      - name: Install to Documents and create desktop shortcut
+        shell: powershell
+        run: .\scripts\install-mkminipro-studio.ps1 -PublishDir (Resolve-Path .\publish)
