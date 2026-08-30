@@ -104,16 +104,18 @@ jobs:
       - name: Put installer on Desktop and Downloads
         shell: powershell
         run: |
-          $src = Resolve-Path '.\installer-out\NovaRGB-Setup.exe'
+          $src = Get-ChildItem '.\installer-out' -Filter 'NovaRGB-Setup.exe' -File -Recurse | Select-Object -First 1
+          if (-not $src) { throw 'NovaRGB-Setup.exe not found after artifact download' }
+          $logo = Get-ChildItem '.\installer-out' -Filter 'NovaRGB.png' -File -Recurse | Select-Object -First 1
           $desktop = [Environment]::GetFolderPath('Desktop')
           if ([string]::IsNullOrWhiteSpace($desktop)) { $desktop = Join-Path $env:USERPROFILE 'Desktop' }
           $downloads = Join-Path $env:USERPROFILE 'Downloads'
           New-Item -ItemType Directory -Path $desktop,$downloads -Force | Out-Null
           $desktopSetup = Join-Path $desktop 'NovaRGB Setup.exe'
           $downloadsSetup = Join-Path $downloads 'NovaRGB Setup.exe'
-          Copy-Item $src $desktopSetup -Force
-          Copy-Item $src $downloadsSetup -Force
-          Copy-Item '.\installer-out\NovaRGB.png' (Join-Path $downloads 'NovaRGB Logo.png') -Force
+          Copy-Item $src.FullName $desktopSetup -Force
+          Copy-Item $src.FullName $downloadsSetup -Force
+          if ($logo) { Copy-Item $logo.FullName (Join-Path $downloads 'NovaRGB Logo.png') -Force }
           Write-Host 'INSTALLER_READY'
           Write-Host "DESKTOP=$desktopSetup"
           Write-Host "DOWNLOADS=$downloadsSetup"
