@@ -1,0 +1,22 @@
+name: Extract MKMINIPRO Keymap
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "scripts/extract-mkminipro-keymap.ps1"
+      - ".github/workflows/extract-mkminipro-keymap.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  keymap:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract concise keymap
+        shell: powershell
+        run: .\scripts\extract-mkminipro-keymap.ps1
