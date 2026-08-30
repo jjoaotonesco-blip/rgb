@@ -1,0 +1,46 @@
+name: Deliver NovaRGB Installer
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/deliver-novargb-installer.yml"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  deliver:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 10
+    steps:
+      - name: Download finished installer artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: NovaRGB-Installer
+          path: installer-out
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: jjoaotonesco-blip/rgb
+          run-id: 33335332441
+
+      - name: Copy setup to Desktop and Downloads
+        shell: powershell
+        run: |
+          $src = Get-ChildItem '.\installer-out' -Filter 'NovaRGB-Setup.exe' -File -Recurse | Select-Object -First 1
+          if (-not $src) { throw 'NovaRGB-Setup.exe not found' }
+          $logo = Get-ChildItem '.\installer-out' -Filter 'NovaRGB.png' -File -Recurse | Select-Object -First 1
+          $desktop = [Environment]::GetFolderPath('Desktop')
+          if ([string]::IsNullOrWhiteSpace($desktop)) { $desktop = Join-Path $env:USERPROFILE 'Desktop' }
+          $downloads = Join-Path $env:USERPROFILE 'Downloads'
+          New-Item -ItemType Directory -Path $desktop,$downloads -Force | Out-Null
+          $d1 = Join-Path $desktop 'NovaRGB Setup.exe'
+          $d2 = Join-Path $downloads 'NovaRGB Setup.exe'
+          Copy-Item $src.FullName $d1 -Force
+          Copy-Item $src.FullName $d2 -Force
+          if ($logo) { Copy-Item $logo.FullName (Join-Path $downloads 'NovaRGB Logo.png') -Force }
+          Write-Host 'INSTALLER_READY'
+          Write-Host "DESKTOP=$d1"
+          Write-Host "DOWNLOADS=$d2"
+          Get-FileHash $d1 -Algorithm SHA256 | Format-List
