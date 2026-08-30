@@ -487,7 +487,7 @@ internal sealed class MainForm : Form
 
     void SetHardwareStatus(string text, Color color)
     {
-        if (InvokeRequired) { BeginInvoke(() => SetHardwareStatus(text, color)); return; }
+        if (InvokeRequired) { BeginInvoke(new Action(() => SetHardwareStatus(text, color))); return; }
         hardwareStatus.Text = text;
         hardwareStatus.ForeColor = color;
     }
@@ -536,8 +536,8 @@ internal sealed class MainForm : Form
         var c = v * s; var x = c * (1 - Math.Abs((h / 60) % 2 - 1)); var m = v - c;
         (double r, double g, double b) = h switch
         {
-            < 60 => (c, x, 0), < 120 => (x, c, 0), < 180 => (0, c, x),
-            < 240 => (0, x, c), < 300 => (x, 0, c), _ => (c, 0, x)
+            < 60 => (c, x, 0d), < 120 => (x, c, 0d), < 180 => (0d, c, x),
+            < 240 => (0d, x, c), < 300 => (x, 0d, c), _ => (c, 0d, x)
         };
         return Color.FromArgb((int)((r + m) * 255), (int)((g + m) * 255), (int)((b + m) * 255));
     }
@@ -578,3 +578,4 @@ internal sealed class MainForm : Form
         grid.Controls.Add(b, pos % 2, pos / 2);
     }
 }
+
