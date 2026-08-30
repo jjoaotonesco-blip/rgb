@@ -1,0 +1,25 @@
+name: Benchmark MKMINIPRO FPS
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/benchmark-mkminipro-fps.yml"
+      - "scripts/benchmark-mkminipro-fps.ps1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Benchmark RGB frame rate
+        shell: powershell
+        run: .\scripts\benchmark-mkminipro-fps.ps1
