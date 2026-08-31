@@ -55,7 +55,6 @@ jobs:
           h=hid.device()
           h.open_path(target['path'])
           try:
-              # Official software wraps config operations in BEGIN/APPLY.
               for label,report in [('BEGIN',simple(0x01)),('GET05',query_config())]:
                   n=h.write(report)
                   print(label,'WRITE',n,bytes(report).hex(' '))
@@ -73,3 +72,7 @@ jobs:
               h.close()
           '@ | Set-Content "$env:RUNNER_TEMP\read_config.py" -Encoding UTF8
           py "$env:RUNNER_TEMP\read_config.py"
+
+      - name: Marker
+        shell: powershell
+        run: Write-Host 'READ_CONFIG_TRIGGER_20260831'
