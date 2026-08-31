@@ -1,0 +1,50 @@
+name: Inspect local MKMINIPRO HID tools
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/inspect-local-hid-tools.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 10
+    steps:
+      - name: Collect existing local probe scripts
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:RUNNER_TEMP 'mkminipro-local-tools'
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+          $roots = @(
+            (Join-Path $env:USERPROFILE 'Documents\Playground\tamanho\tools'),
+            'C:\Users\jjoao\Documents\Playground\tamanho\tools'
+          ) | Select-Object -Unique
+          $wanted = @(
+            'mkminipro_hid_logger.py',
+            'mkminipro_writefile_stack.py',
+            'mkminipro_db_snapshot.py',
+            'mkminipro_method_probe.py',
+            'mkminipro_perkey_correlation.py',
+            'mkminipro_set_db_value.py'
+          )
+          foreach ($root in $roots) {
+            if (-not (Test-Path $root)) { continue }
+            foreach ($name in $wanted) {
+              $p = Join-Path $root $name
+              if (Test-Path $p) { Copy-Item $p (Join-Path $out $name) -Force }
+            }
+          }
+          Get-ChildItem $out -File | Select-Object Name,Length,FullName | Format-Table -AutoSize
+          if (-not (Get-ChildItem $out -File -ErrorAction SilentlyContinue)) { throw 'No existing probe scripts found' }
+      - name: Upload scripts for read-only inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: mkminipro-local-hid-tools
+          path: ${{ runner.temp }}/mkminipro-local-tools
+          retention-days: 1
