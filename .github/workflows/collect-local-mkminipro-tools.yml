@@ -1,0 +1,63 @@
+name: Collect local MKMINIPRO tools
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/collect-local-mkminipro-tools.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 10
+    steps:
+      - name: Collect local tools and state
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $out = Join-Path $env:RUNNER_TEMP 'mkmini-local-tools'
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+
+          $report = Join-Path $out 'report.txt'
+          "User=$env:USERNAME" | Set-Content $report
+          "Computer=$env:COMPUTERNAME" | Add-Content $report
+          "Time=$(Get-Date -Format o)" | Add-Content $report
+          "" | Add-Content $report
+
+          $paths = @(
+            'C:\Users\jjoao\Documents\Playground\tamanho\tools',
+            'C:\Users\jjoao\Documents\Playground',
+            'C:\Users\jjoao\Documents\MKMINIPRO Files\db',
+            'C:\Program Files (x86)\Keyboard YH-MKMINIPRO'
+          )
+          foreach ($p in $paths) {
+            "=== $p ===" | Add-Content $report
+            if (Test-Path $p) {
+              Get-ChildItem $p -Recurse -Force -ErrorAction SilentlyContinue |
+                Select-Object FullName,Length,LastWriteTime |
+                Format-Table -AutoSize | Out-String -Width 220 | Add-Content $report
+            } else {
+              "MISSING" | Add-Content $report
+            }
+            "" | Add-Content $report
+          }
+
+          $toolSrc = 'C:\Users\jjoao\Documents\Playground\tamanho\tools'
+          if (Test-Path $toolSrc) {
+            Copy-Item $toolSrc -Destination (Join-Path $out 'tools') -Recurse -Force -ErrorAction SilentlyContinue
+          }
+          $dbSrc = 'C:\Users\jjoao\Documents\MKMINIPRO Files\db'
+          if (Test-Path $dbSrc) {
+            Copy-Item $dbSrc -Destination (Join-Path $out 'official-db') -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Upload collected data
+        uses: actions/upload-artifact@v4
+        with:
+          name: mkmini-local-tools
+          path: ${{ runner.temp }}\mkmini-local-tools
+          retention-days: 3
