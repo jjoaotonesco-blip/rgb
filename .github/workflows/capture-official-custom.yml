@@ -23,6 +23,7 @@ jobs:
           if (-not (Test-Path $tool)) { throw "Logger not found: $tool" }
           $out = Join-Path $env:RUNNER_TEMP 'mkminipro-official-custom.log'
           Write-Host 'CAPTURE_READY: open official MKMINIPRO, choose Custom, set a simple color, click Apply once.'
+          Write-Host 'Capture trigger: 2026-08-31T07:35:00Z'
           python $tool --wait 120 --seconds 45 --output $out
           if (-not (Test-Path $out)) { throw 'Capture log missing' }
           Get-Content $out
