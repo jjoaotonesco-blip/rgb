@@ -4,6 +4,7 @@ on:
   push:
     branches: ["main"]
     paths:
+      - "scripts/read-mkminipro-light-config.ps1"
       - ".github/workflows/read-mkminipro-light-config.yml"
   workflow_dispatch:
 
@@ -15,64 +16,9 @@ jobs:
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 8
     steps:
-      - name: Install hidapi
-        shell: powershell
-        run: py -m pip install --disable-pip-version-check --quiet hidapi
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Read lighting config only
         shell: powershell
-        run: |
-          @'
-          import hid, time
-
-          VID=0x5566
-          PID=0x0008
-
-          def checksum(r):
-              return sum(r[5:65]) & 0xff
-
-          def simple(cmd):
-              r=[0]*65
-              r[1]=0x55; r[2]=cmd; r[4]=checksum(r)
-              return r
-
-          def query_config():
-              r=[0]*65
-              r[1]=0x55; r[2]=0x05; r[5]=0x20; r[4]=checksum(r)
-              return r
-
-          devs=hid.enumerate(VID,PID)
-          target=None
-          for d in devs:
-              path=d.get('path')
-              ps=path.decode(errors='ignore') if isinstance(path,bytes) else str(path)
-              print('ENUM', 'interface=',d.get('interface_number'),'usage_page=',hex(d.get('usage_page',0)),'path=',ps)
-              if 'mi_02' in ps.lower():
-                  target=d
-          if not target:
-              raise SystemExit('MI_02 HID interface not found')
-
-          h=hid.device()
-          h.open_path(target['path'])
-          try:
-              for label,report in [('BEGIN',simple(0x01)),('GET05',query_config())]:
-                  n=h.write(report)
-                  print(label,'WRITE',n,bytes(report).hex(' '))
-                  resp=h.read(65,1000)
-                  print(label,'READ',len(resp),bytes(resp).hex(' '))
-                  if not resp:
-                      raise RuntimeError(label+' no response')
-
-              report=simple(0x02)
-              n=h.write(report)
-              print('APPLY WRITE',n,bytes(report).hex(' '))
-              resp=h.read(65,1000)
-              print('APPLY READ',len(resp),bytes(resp).hex(' '))
-          finally:
-              h.close()
-          '@ | Set-Content "$env:RUNNER_TEMP\read_config.py" -Encoding UTF8
-          py "$env:RUNNER_TEMP\read_config.py"
-
-      - name: Marker
-        shell: powershell
-        run: Write-Host 'READ_CONFIG_TRIGGER_20260831'
+        run: .\scripts\read-mkminipro-light-config.ps1
