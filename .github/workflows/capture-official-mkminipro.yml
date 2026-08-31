@@ -57,3 +57,8 @@ jobs:
           path: ${{ runner.temp }}\official-mkminipro-hid-trace.txt
           if-no-files-found: warn
           retention-days: 1
+
+      - name: Capture marker
+        if: always()
+        shell: powershell
+        run: Write-Host 'OFFICIAL_CAPTURE_TRIGGER_20260831'
