@@ -1,0 +1,54 @@
+name: Capture Official MKMINIPRO Save
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "scripts/capture-official-mkminipro.py"
+      - ".github/workflows/capture-official-mkminipro.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare Python and Frida
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          py -3 --version
+          py -3 -m pip install --user --disable-pip-version-check frida
+
+      - name: Capture official HID writes for 120 seconds
+        shell: powershell
+        env:
+          CAPTURE_SECONDS: '120'
+          TRACE_OUT: '${{ runner.temp }}\official-mkminipro-hid-trace.txt'
+        run: |
+          Write-Host 'The official MKMINIPRO app should open on the desktop.'
+          Write-Host 'Set ONE known custom/static color profile and click Apply/Save ONCE.'
+          Write-Host 'Do not use Nova RGB during this capture.'
+          py -3 .\scripts\capture-official-mkminipro.py
+
+      - name: Show captured packets
+        if: always()
+        shell: powershell
+        run: |
+          $p = '${{ runner.temp }}\official-mkminipro-hid-trace.txt'
+          if (Test-Path $p) { Get-Content $p } else { Write-Host 'No trace file was produced.' }
+
+      - name: Upload trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: official-mkminipro-hid-trace
+          path: ${{ runner.temp }}\official-mkminipro-hid-trace.txt
+          if-no-files-found: warn
+          retention-days: 1
