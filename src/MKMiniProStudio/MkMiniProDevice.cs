@@ -43,8 +43,10 @@ internal sealed class MkMiniProDevice : IDisposable
         finally { gate.Release(); }
     }
 
-    // Official MKMINIPRO section 7 / Custom lighting path. Unlike 0xDD live preview,
-    // command 0x0B stores the custom per-key map used by the keyboard after preview ends.
+    // Official MKMINIPRO section 7 / Custom lighting path.
+    // Static analysis of MKMINIPRO.exe confirms command 0x0B, seven 56-byte chunks
+    // (last chunk 48), wrapped by 0x01/0x02. Persistent writes intentionally use
+    // the vendor transport pacing/retry behavior instead of the fast 0xDD live path.
     public async Task SendPersistentFrameAsync(byte[] rgb384, CancellationToken ct = default)
     {
         if (rgb384.Length != 384) throw new ArgumentException("RGB frame must be exactly 384 bytes.", nameof(rgb384));
@@ -74,13 +76,18 @@ internal sealed class MkMiniProDevice : IDisposable
         using var h = CreateFile(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
         if (h.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error(), "Não foi possível abrir o RGB do MKMINIPRO. Fecha o software oficial da Mars e tenta novamente.");
         ValidateCaps(h);
-        SendAck(h, Simple(0x01), "BEGIN CUSTOM", ct);
+
+        // MKMINIPRO.exe's low-level wrapper sleeps 10 ms before an initial report write.
+        // On a failed exchange it retries after ~100 ms and then ~1000 ms. A failed
+        // WriteFile itself gets one extra try after another 10 ms. Preserve that exact
+        // conservative behavior for nonvolatile/custom writes.
+        SendAckOfficialPersistent(h, Simple(0x01), "BEGIN CUSTOM", ct);
         for (int chunk=0; chunk<7; chunk++)
         {
             int offset=chunk*56, len=chunk<6 ? 56 : 48;
-            SendAck(h, Data(rgb, offset, len, 0x0B), $"CUSTOM DATA {chunk}", ct);
+            SendAckOfficialPersistent(h, Data(rgb, offset, len, 0x0B), $"CUSTOM DATA {chunk}", ct);
         }
-        SendAck(h, Simple(0x02), "APPLY CUSTOM", ct);
+        SendAckOfficialPersistent(h, Simple(0x02), "APPLY CUSTOM", ct);
     }
 
     static void ValidateCaps(SafeFileHandle h)
@@ -94,6 +101,8 @@ internal sealed class MkMiniProDevice : IDisposable
         finally { HidD_FreePreparsedData(p); }
     }
 
+    // Fast transport for live 0xDD preview/animation. This path is already physically
+    // validated at ~27 FPS and deliberately remains unchanged.
     static void SendAck(SafeFileHandle h, byte[] report, string label, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
@@ -102,6 +111,67 @@ internal sealed class MkMiniProDevice : IDisposable
         var response = new byte[65];
         if (!ReadFile(h, response, 65, out var read, IntPtr.Zero)) throw new Win32Exception(Marshal.GetLastWin32Error(), $"Falha a ler ACK {label}");
         if (read < 2 || response[1] != 0xAA) throw new IOException($"ACK inválido em {label}");
+    }
+
+    static void SendAckOfficialPersistent(SafeFileHandle h, byte[] report, string label, CancellationToken ct)
+    {
+        // Exchange retries observed in the vendor transport around MKMINIPRO.exe 0x434AE0.
+        // Attempt 1 immediately (with mandatory 10 ms pre-write delay), then 100 ms and
+        // 1000 ms backoff before attempts 2 and 3.
+        int[] exchangeBackoffMs = [0, 100, 1000];
+        Exception? last = null;
+
+        for (int attempt = 0; attempt < exchangeBackoffMs.Length; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (exchangeBackoffMs[attempt] > 0)
+                SleepCancelable(exchangeBackoffMs[attempt], ct);
+
+            try
+            {
+                // Vendor initial-write pacing.
+                SleepCancelable(10, ct);
+
+                bool wrote = WriteFile(h, report, 65, out var written, IntPtr.Zero) && written == 65;
+                if (!wrote)
+                {
+                    // Vendor code gives a failed WriteFile one more chance after ~10 ms.
+                    int err = Marshal.GetLastWin32Error();
+                    SleepCancelable(10, ct);
+                    wrote = WriteFile(h, report, 65, out written, IntPtr.Zero) && written == 65;
+                    if (!wrote)
+                        throw new Win32Exception(Marshal.GetLastWin32Error() != 0 ? Marshal.GetLastWin32Error() : err, $"Falha no envio {label}");
+                }
+
+                var response = new byte[65];
+                if (!ReadFile(h, response, 65, out var read, IntPtr.Zero))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), $"Falha a ler ACK {label}");
+
+                // Raw Windows HID includes report-id byte 0; the vendor helper sees 0xAA
+                // as its first payload byte, therefore it appears at response[1] here.
+                if (read >= 2 && response[1] == 0xAA)
+                    return;
+
+                last = new IOException($"ACK inválido em {label} (tentativa {attempt + 1})");
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { last = ex; }
+        }
+
+        throw new IOException($"O teclado não confirmou {label} após os retries oficiais.", last);
+    }
+
+    static void SleepCancelable(int milliseconds, CancellationToken ct)
+    {
+        const int slice = 10;
+        int remaining = milliseconds;
+        while (remaining > 0)
+        {
+            ct.ThrowIfCancellationRequested();
+            int n = Math.Min(slice, remaining);
+            Thread.Sleep(n);
+            remaining -= n;
+        }
     }
 
     static byte[] Simple(byte cmd)
