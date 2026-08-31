@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 
-# Reuse the already validated HID P/Invoke implementation from the physical C-key test,
+# Post-reset diagnostic. Reuse the already validated HID P/Invoke implementation from the physical C-key test,
 # but do NOT execute its Run() method and do NOT send any RGB/config write commands.
 $basePath = Join-Path $PSScriptRoot 'test-mkminipro-c-green.ps1'
 $text = Get-Content $basePath -Raw
