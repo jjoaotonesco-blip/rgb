@@ -1,0 +1,34 @@
+name: Capture official MKMINIPRO Custom HID writes
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/capture-official-custom.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 5
+    steps:
+      - name: Capture official HID writes
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tool = 'C:\Users\jjoao\Documents\Playground\tamanho\tools\mkminipro_writefile_stack.py'
+          if (-not (Test-Path $tool)) { throw "Logger not found: $tool" }
+          $out = Join-Path $env:RUNNER_TEMP 'mkminipro-official-custom.log'
+          Write-Host 'CAPTURE_READY: open official MKMINIPRO, choose Custom, set a simple color, click Apply once.'
+          python $tool --wait 120 --seconds 45 --output $out
+          if (-not (Test-Path $out)) { throw 'Capture log missing' }
+          Get-Content $out
+      - name: Upload capture
+        uses: actions/upload-artifact@v4
+        with:
+          name: mkminipro-official-custom-capture
+          path: ${{ runner.temp }}/mkminipro-official-custom.log
+          retention-days: 1
