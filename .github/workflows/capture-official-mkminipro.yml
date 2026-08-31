@@ -19,12 +19,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare Python and Frida
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Frida
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          py -3 --version
-          py -3 -m pip install --user --disable-pip-version-check frida
+          python --version
+          python -m pip install --disable-pip-version-check frida
 
       - name: Capture official HID writes for 120 seconds
         shell: powershell
@@ -35,7 +40,7 @@ jobs:
           Write-Host 'The official MKMINIPRO app should open on the desktop.'
           Write-Host 'Set ONE known custom/static color profile and click Apply/Save ONCE.'
           Write-Host 'Do not use Nova RGB during this capture.'
-          py -3 .\scripts\capture-official-mkminipro.py
+          python .\scripts\capture-official-mkminipro.py
 
       - name: Show captured packets
         if: always()
