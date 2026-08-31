@@ -1,0 +1,65 @@
+name: Recover MKMINIPRO Keyboard
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/recover-keyboard.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 5
+    steps:
+      - name: Stop RGB apps and restart keyboard USB device
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+
+          Write-Host '=== STOP RGB APPS ==='
+          Get-Process -ErrorAction SilentlyContinue |
+            Where-Object { $_.ProcessName -match '(?i)nova.?rgb|rgb.?studio|mkminipro.?studio' } |
+            ForEach-Object {
+              Write-Host "Stopping $($_.ProcessName) PID=$($_.Id)"
+              Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+            }
+
+          Write-Host '=== BEFORE ==='
+          Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue |
+            Where-Object { $_.InstanceId -match '(?i)VID_5566&PID_0008' } |
+            Select-Object Status,Class,FriendlyName,InstanceId |
+            Format-Table -AutoSize | Out-String -Width 300 | Write-Host
+
+          $usb = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue |
+            Where-Object { $_.InstanceId -like 'USB\VID_5566&PID_0008*' }
+
+          foreach ($d in $usb) {
+            Write-Host "Restarting parent USB device: $($d.InstanceId)"
+            & pnputil.exe /restart-device "$($d.InstanceId)"
+            Write-Host "pnputil exit=$LASTEXITCODE"
+          }
+
+          if (-not $usb) {
+            Write-Host 'No USB parent matched; restarting HID interfaces instead.'
+            $hid = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue |
+              Where-Object { $_.InstanceId -like 'HID\VID_5566&PID_0008*' }
+            foreach ($d in $hid) {
+              Write-Host "Restarting HID device: $($d.InstanceId)"
+              & pnputil.exe /restart-device "$($d.InstanceId)"
+              Write-Host "pnputil exit=$LASTEXITCODE"
+            }
+          }
+
+          Start-Sleep -Seconds 3
+
+          Write-Host '=== AFTER ==='
+          Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue |
+            Where-Object { $_.InstanceId -match '(?i)VID_5566&PID_0008' } |
+            Select-Object Status,Class,FriendlyName,InstanceId |
+            Format-Table -AutoSize | Out-String -Width 300 | Write-Host
+
+          Write-Host 'RECOVERY_DONE'
