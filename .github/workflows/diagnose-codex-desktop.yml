@@ -1,0 +1,165 @@
+name: Diagnose Codex Desktop
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/diagnose-codex-desktop.yml"
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 8
+    steps:
+      - name: Collect Codex Desktop diagnostics
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $out = Join-Path $env:RUNNER_TEMP 'codex-desktop-diagnose'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+
+          function Write-Section($path, $title) {
+            Add-Content -LiteralPath $path -Value "`r`n===== $title ====="
+          }
+
+          function Redact-Text([string]$text) {
+            if ($null -eq $text) { return '' }
+            $r = $text
+            $r = $r -replace '(?i)(api[_-]?key|x-api-key|bearer|authorization|token|secret|password|session|cookie)(["''\s:=]+)[^\s"'']+', '$1$2[REDACTED]'
+            $r = $r -replace 'sk-[A-Za-z0-9_-]{20,}', 'sk-[REDACTED]'
+            $r = $r -replace 'eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}', 'jwt-[REDACTED]'
+            return $r
+          }
+
+          function Run-Cmd($path, $title, $scriptBlock) {
+            Write-Section $path $title
+            try {
+              $result = & $scriptBlock 2>&1 | Out-String
+              Add-Content -LiteralPath $path -Value (Redact-Text $result)
+            } catch {
+              Add-Content -LiteralPath $path -Value ("ERROR: " + $_.Exception.Message)
+            }
+          }
+
+          $main = Join-Path $out 'diagnostics.log'
+          Set-Content -LiteralPath $main -Value 'Codex Desktop diagnostics - redacted'
+
+          Run-Cmd $main 'Basic system/user' {
+            "Time: $(Get-Date -Format o)"
+            "Computer: $env:COMPUTERNAME"
+            "UserName env: $env:USERNAME"
+            "UserProfile env: $env:USERPROFILE"
+            "RunnerTemp: $env:RUNNER_TEMP"
+            whoami
+            $PSVersionTable
+          }
+
+          Run-Cmd $main 'Git availability' {
+            git --version
+            where.exe git
+            git config --global --list --show-origin
+            git config --global --get-all safe.directory
+          }
+
+          $repo = 'C:\Users\jjoao\Documents\NovaRGB-source'
+          Run-Cmd $main 'NovaRGB-source worktree checks' {
+            "Repo path: $repo"
+            "Exists: $(Test-Path -LiteralPath $repo)"
+            if (Test-Path -LiteralPath $repo) {
+              Set-Location -LiteralPath $repo
+              "PWD: $(Get-Location)"
+              git rev-parse --show-toplevel
+              git rev-parse --is-inside-work-tree
+              git branch --show-current
+              git status --short
+              git status --porcelain=v2
+              git worktree list --porcelain
+              git config --local --list --show-origin
+              "index.lock exists: $(Test-Path -LiteralPath (Join-Path $repo '.git\index.lock'))"
+              "config.lock exists: $(Test-Path -LiteralPath (Join-Path $repo '.git\config.lock'))"
+              "shallow exists: $(Test-Path -LiteralPath (Join-Path $repo '.git\shallow'))"
+              Get-ChildItem -Force -LiteralPath $repo | Select-Object Mode,Length,LastWriteTime,Name | Format-Table -AutoSize | Out-String
+            }
+          }
+
+          Run-Cmd $main 'Codex/ChatGPT processes' {
+            Get-CimInstance Win32_Process |
+              Where-Object { $_.Name -match 'codex|chatgpt|openai|electron|node' -or $_.CommandLine -match 'codex|chatgpt|openai' } |
+              Select-Object ProcessId,Name,ExecutablePath,CommandLine,CreationDate |
+              Format-List
+          }
+
+          Run-Cmd $main 'Recent application errors from Event Log' {
+            Get-WinEvent -LogName Application -MaxEvents 150 |
+              Where-Object { $_.ProviderName -match 'Application Error|\.NET Runtime|Windows Error Reporting|ChatGPT|Codex' -or $_.Message -match 'ChatGPT|Codex|codex' } |
+              Select-Object TimeCreated,ProviderName,Id,LevelDisplayName,Message |
+              Format-List
+          }
+
+          $candidateRoots = @(
+            "$env:APPDATA\ChatGPT",
+            "$env:APPDATA\OpenAI",
+            "$env:APPDATA\Codex",
+            "$env:LOCALAPPDATA\ChatGPT",
+            "$env:LOCALAPPDATA\OpenAI",
+            "$env:LOCALAPPDATA\Codex",
+            "$env:USERPROFILE\.codex",
+            'C:\Users\jjoao\AppData\Roaming\ChatGPT',
+            'C:\Users\jjoao\AppData\Roaming\OpenAI',
+            'C:\Users\jjoao\AppData\Roaming\Codex',
+            'C:\Users\jjoao\AppData\Local\ChatGPT',
+            'C:\Users\jjoao\AppData\Local\OpenAI',
+            'C:\Users\jjoao\AppData\Local\Codex',
+            'C:\Users\jjoao\.codex'
+          ) | Select-Object -Unique
+
+          Run-Cmd $main 'Candidate log/config roots' {
+            foreach ($root in $candidateRoots) {
+              "--- $root"
+              if (Test-Path -LiteralPath $root) {
+                Get-Item -LiteralPath $root | Select-Object FullName,Attributes,LastWriteTime
+                Get-ChildItem -LiteralPath $root -Force -ErrorAction SilentlyContinue |
+                  Select-Object Mode,Length,LastWriteTime,Name |
+                  Sort-Object LastWriteTime -Descending |
+                  Select-Object -First 80 |
+                  Format-Table -AutoSize | Out-String
+              } else {
+                'missing'
+              }
+            }
+          }
+
+          $logDir = Join-Path $out 'redacted-logs'
+          New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+          $allFiles = @()
+          foreach ($root in $candidateRoots) {
+            if (Test-Path -LiteralPath $root) {
+              $allFiles += Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue |
+                Where-Object { -not $_.PSIsContainer -and $_.Length -lt 5MB -and ($_.Extension -match '\.(log|txt|json|jsonl)$' -or $_.Name -match 'log|codex|chatgpt|error|crash|config|settings') }
+            }
+          }
+          $allFiles = $allFiles | Sort-Object LastWriteTime -Descending | Select-Object -First 40
+          $idx = 0
+          $manifest = Join-Path $out 'copied-log-manifest.txt'
+          foreach ($file in $allFiles) {
+            try {
+              $idx++
+              $dest = Join-Path $logDir (('{0:D2}-' -f $idx) + ($file.FullName -replace '[:\\/ ]','_'))
+              $content = Get-Content -LiteralPath $file.FullName -Raw -ErrorAction Stop
+              Set-Content -LiteralPath $dest -Value (Redact-Text $content)
+              Add-Content -LiteralPath $manifest -Value "$idx`t$($file.FullName)`t$($file.Length)`t$($file.LastWriteTime)"
+            } catch {
+              Add-Content -LiteralPath $manifest -Value "SKIP`t$($file.FullName)`t$($_.Exception.Message)"
+            }
+          }
+
+          Compress-Archive -Path (Join-Path $out '*') -DestinationPath (Join-Path $env:RUNNER_TEMP 'codex-desktop-diagnose.zip') -Force
+          Write-Host "Diagnostics collected at $out"
+
+      - name: Upload diagnostics artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-desktop-diagnose
+          path: ${{ runner.temp }}\codex-desktop-diagnose.zip
+          if-no-files-found: error
